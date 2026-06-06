@@ -376,6 +376,9 @@ def sidebar_html():
     <div class="nav-item" data-tab="settings" onclick="switchTab('settings')">
       <span class="nav-icon">⚙️</span> Settings
     </div>
+    <div class="nav-item" onclick="signOut()" style="color:var(--muted);margin-top:8px;">
+      <span class="nav-icon">↩</span> Sign Out
+    </div>
   </nav>
   <div class="main-area">
 """
@@ -784,9 +787,9 @@ const MEAL_STYLE_LABELS = {{
 }};
 
 // ── Persisted state ────────────────────────────────────────────────────────
-let userSettings = JSON.parse(localStorage.getItem('vidya_settings') || 'null');
-let userTargets  = JSON.parse(localStorage.getItem('vidya_targets')  || 'null');
-let mealPlan2D   = JSON.parse(localStorage.getItem('vidya_mealplan2d') || 'null');
+let userSettings = null;
+let userTargets  = null;
+let mealPlan2D   = null;
 
 // ── Sidebar tab switching ──────────────────────────────────────────────────
 // (overrides old switchTab — same fn name, updated for sidebar)
@@ -915,9 +918,7 @@ function saveAndCalculate() {{
 
   userSettings = {{ wt, age, ft, inn, sex, goal, days, dur, mealStyle }};
   userTargets  = {{ bmr, tdee, targetKcal, proteinG:protG, carbG, fatG, adj, goal, wt_kg }};
-  localStorage.setItem('vidya_settings', JSON.stringify(userSettings));
-  localStorage.setItem('vidya_targets',  JSON.stringify(userTargets));
-
+  saveUserProfile();
   displaySettings();
   renderMacrosChart(); renderMacrosSummary();
   showToast('✅ Targets saved and applied to your Meal Plan!');
@@ -959,7 +960,7 @@ function restoreSettings() {{
 }}
 
 // ── Meal Plan ─────────────────────────────────────────────────────────────
-function saveMealPlan2D() {{ localStorage.setItem('vidya_mealplan2d', JSON.stringify(mealPlan2D)); }}
+function saveMealPlan2D() {{ db_saveMealPlan2D(); }}
 
 // Score a recipe candidate by pantry stock overlap + calorie proximity.
 // weekIngs = Set of ingredient names already committed for the week.
@@ -1156,7 +1157,6 @@ function syncMealPlanToGrocery(){{
   const ids=new Set();
   mealPlan2D.forEach(s=>s&&s.forEach(r=>r&&ids.add(r)));
   mealPlan=[ ...ids ];
-  localStorage.setItem('vidya_plan',JSON.stringify(mealPlan));
   document.querySelectorAll('.planner-check').forEach(cb=>{{cb.checked=ids.has(cb.value);}});
   refreshGroceryForPlan(); refreshShoppingSummary();
   switchTab('grocery');
@@ -1254,8 +1254,7 @@ function obFinish() {{
   userTargets  = {{ bmr:c.bmr, tdee:c.tdee, targetKcal:c.tKcal,
     proteinG:c.protG, carbG:c.carbG, fatG:c.fatG,
     adj:c.adj, goal:c.goal, wt_kg:c.wKg }};
-  localStorage.setItem('vidya_settings', JSON.stringify(userSettings));
-  localStorage.setItem('vidya_targets',  JSON.stringify(userTargets));
+  saveUserProfile();
   // Pre-fill Settings tab fields
   restoreSettings();
   // Close modal, generate plan, go to dashboard
@@ -1267,6 +1266,10 @@ function obFinish() {{
 
 // ── INIT ────────────────────────────────────────────────────────────────────
 function initExtras() {{
+  customRecipes.forEach(r => injectCustomRecipe(r));
+  applyStockToUI();
+  restoreMealPlan();
+  restoreLog();
   if (mealPlan2D && mealPlan2D.some(s => s && s.some(r => r))) {{
     showMealPlanContent();
     renderMealPlanGrid(); renderMacrosChart(); renderMacrosSummary();

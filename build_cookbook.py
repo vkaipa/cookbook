@@ -7,11 +7,12 @@ import json, os, sys
 sys.path.insert(0, os.path.dirname(__file__))
 from recipe_data import RECIPES
 from grocery_data import GROCERY_CATEGORIES, GENERAL_PANTRY, RECIPE_NAMES
+from supabase_js import SUPABASE_JS
 from _new_tabs import (EXTRA_CSS, SLOT_RECIPE_MAP, BATCH_IDS,
                        sidebar_html, dashboard_tab_html, settings_tab_html,
                        mealplan_tab_html, onboarding_modal_html, extra_js)
 
-OUT = os.path.join(os.path.dirname(__file__), "mnt", "Grocery List", "recipe-book.html")
+OUT = os.path.join(os.path.dirname(__file__), "cookbook", "index.html")
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -419,10 +420,10 @@ JS = """
 # JS continued as a separate multi-line string to keep build.py under token limit
 JS2 = r"""
 // ── State ─────────────────────────────────────────────────────────────────
-let stockStatus    = JSON.parse(localStorage.getItem('vidya_stock') || '{}');
-let mealPlan       = JSON.parse(localStorage.getItem('vidya_plan')  || '[]');
-let weekLog        = JSON.parse(localStorage.getItem('vidya_log')   || '[]');
-let customRecipes  = JSON.parse(localStorage.getItem('vidya_custom')|| '[]');
+let stockStatus   = {};
+let mealPlan      = [];
+let weekLog       = JSON.parse(localStorage.getItem('vidya_log') || '[]');
+let customRecipes = [];
 let gFilter        = 'all';
 let rFilter        = 'all';
 let rSearch        = '';
@@ -483,7 +484,7 @@ document.getElementById('search').addEventListener('input', e => {
 });
 
 // ── Stock management ──────────────────────────────────────────────────────
-function saveStock() { localStorage.setItem('vidya_stock', JSON.stringify(stockStatus)); }
+function saveStock() {}
 
 // Reset button — removes "have it" status, item returns to "need to buy"
 function toggleOut(btn, itemName) {
@@ -492,21 +493,22 @@ function toggleOut(btn, itemName) {
   row.classList.remove('in-stock');
   const cb = row.querySelector('.stock-check');
   if (cb) cb.checked = false;
-  saveStock();
+  db_saveCartItem(itemName, false);
   refreshShoppingSummary();
 }
 
 function updateStock(cb) {
   const itemName = cb.dataset.item;
   const row = cb.closest('tr');
-  if (cb.checked) {
+  const checked = cb.checked;
+  if (checked) {
     stockStatus[itemName] = 'in';
     row.classList.add('in-stock');
   } else {
     delete stockStatus[itemName];
     row.classList.remove('in-stock');
   }
-  saveStock();
+  db_saveCartItem(itemName, checked);
   refreshShoppingSummary();
 }
 
@@ -535,7 +537,6 @@ function toggleCat(header) {
 function updateMealPlan() {
   mealPlan = [];
   document.querySelectorAll('.planner-check:checked').forEach(cb => mealPlan.push(cb.value));
-  localStorage.setItem('vidya_plan', JSON.stringify(mealPlan));
   refreshGroceryForPlan();
   refreshShoppingSummary();
 }
@@ -576,7 +577,6 @@ function selectAll() {
 function clearPlan() {
   document.querySelectorAll('.planner-check').forEach(cb => { cb.checked = false; });
   mealPlan = [];
-  localStorage.setItem('vidya_plan', JSON.stringify(mealPlan));
   refreshGroceryForPlan();
   refreshShoppingSummary();
 }
@@ -717,7 +717,7 @@ document.getElementById('recipe-form').addEventListener('submit', e => {
     custom: true,
   };
   customRecipes.push(newRecipe);
-  localStorage.setItem('vidya_custom', JSON.stringify(customRecipes));
+  db_saveCustomRecipe(newRecipe);
   injectCustomRecipe(newRecipe);
   closeAddModal();
   showToast(`🌿 "${newRecipe.name}" added to your cookbook!`);
@@ -835,16 +835,7 @@ document.querySelectorAll('table.recipe-table th').forEach((th, i) => {
 
 // ── Init ──────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  // Restore custom recipes
-  customRecipes.forEach(r => injectCustomRecipe(r));
-  // Restore stock UI
-  applyStockToUI();
-  // Restore meal plan checkboxes
-  restoreMealPlan();
-  // Restore week log
-  restoreLog();
-  // Init new tabs (dashboard, meal plan, settings)
-  initExtras();
+  initAuth();
 });
 """
 
@@ -884,9 +875,41 @@ def build():
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>{CSS}</style>
 </head>
 <body>
+
+<div id="auth-screen" style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);">
+  <div style="background:#fff;border:1px solid var(--border);border-radius:16px;padding:40px 36px;width:min(420px,92vw);box-shadow:0 4px 24px rgba(0,0,0,.08);">
+    <div style="text-align:center;margin-bottom:28px;">
+      <div style="font-size:2.5rem;margin-bottom:10px;">🌿</div>
+      <h1 id="auth-title" style="font-size:1.3rem;color:var(--green);font-family:'Open Sans',sans-serif;font-weight:700;margin:0 0 6px;">Sign in to your cookbook</h1>
+      <p style="font-family:sans-serif;font-size:.88rem;color:var(--muted);margin:0;">Meal planning built for your training goals</p>
+    </div>
+    <form id="auth-form" autocomplete="on">
+      <div style="margin-bottom:12px;">
+        <input type="email" id="auth-email" placeholder="Email address" autocomplete="email"
+          style="width:100%;border:2px solid var(--border);border-radius:8px;padding:11px 14px;font-family:sans-serif;font-size:.92rem;outline:none;box-sizing:border-box;">
+      </div>
+      <div style="margin-bottom:20px;">
+        <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password"
+          style="width:100%;border:2px solid var(--border);border-radius:8px;padding:11px 14px;font-family:sans-serif;font-size:.92rem;outline:none;box-sizing:border-box;">
+      </div>
+      <button type="submit" id="auth-submit"
+        style="width:100%;background:var(--green);color:#fff;border:none;border-radius:8px;padding:13px;font-family:sans-serif;font-weight:700;font-size:.95rem;cursor:pointer;">Sign In</button>
+    </form>
+    <div style="text-align:center;margin-top:14px;">
+      <button onclick="sendMagicLink()" style="background:none;border:none;color:var(--green);font-family:sans-serif;font-size:.84rem;cursor:pointer;text-decoration:underline;padding:0;">Send magic link instead</button>
+    </div>
+    <div style="text-align:center;margin-top:8px;">
+      <button id="auth-toggle" onclick="toggleAuthMode()" style="background:none;border:none;color:var(--muted);font-family:sans-serif;font-size:.82rem;cursor:pointer;padding:0;">Don't have an account? Sign up</button>
+    </div>
+    <div id="auth-message" style="margin-top:14px;text-align:center;font-family:sans-serif;font-size:.84rem;color:var(--red);min-height:18px;"></div>
+  </div>
+</div>
+
+<div id="app-container" style="display:none">
 
 <div id="log-bar">
   <span>📋 Week Log: <span id="log-count"></span></span>
@@ -1068,7 +1091,10 @@ def build():
 
 <div class="toast" id="toast"></div>
 
+</div><!-- /app-container -->
+
 <script>
+{SUPABASE_JS}
 {JS}
 {js_data()}
 {JS2}

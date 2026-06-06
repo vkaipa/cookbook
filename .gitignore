@@ -3,7 +3,5 @@ __pycache__/
 *.pyo
 tmp/
 .DS_Store
-mnt/uploads/
-mnt/.claude/
-mnt/.auto-memory/
-mnt/.remote-plugins/
+mnt/
+cookbook/
